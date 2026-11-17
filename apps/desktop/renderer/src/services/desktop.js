@@ -24,3 +24,8 @@ export async function initializeDesktop() {
     "The bundled engine did not become ready. See %USERPROFILE%\\.omnidev\\desktop-engine.log (or OMNIDEV_HOME), or connect to an engine in Connection settings.",
   );
 }
+
+export async function openPaint() {
+  if (!window.__TAURI_INTERNALS__) throw new Error("Open Paint from the installed OmniDev desktop app on Windows.");
+  await invoke("open_paint");
+}
