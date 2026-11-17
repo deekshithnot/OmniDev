@@ -13,6 +13,14 @@ publisher = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(publisher)
 
 
+class AssetPolicyTests(unittest.TestCase):
+    def test_windows_uninstaller_is_a_managed_release_asset(self):
+        self.assertTrue(publisher.managed('OmniDev-Windows-Uninstaller.ps1'))
+
+    def test_unrelated_powershell_scripts_are_not_managed(self):
+        self.assertFalse(publisher.managed('cleanup-my-system.ps1'))
+
+
 class LookupTests(unittest.TestCase):
     def response(self, code, body='{}'):
         return subprocess.CompletedProcess([], int(code != 200), f'HTTP/2.0 {code} Status\n\n{body}', 'diagnostic\n')
