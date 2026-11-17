@@ -243,8 +243,23 @@ def test_model_catalog_classifies_chat_capability(item, model_id, expected):
 
 
 @pytest.mark.asyncio
-async def test_discovery_marks_non_chat_models_for_separate_capability_routing():
+async def test_discovery_marks_non_chat_models_for_separate_capability_routing(monkeypatch):
     from app.services.model_router import discover_models
+
+    class FakeProvider:
+        def __init__(self, transport):
+            self._client = httpx.AsyncClient(
+                base_url="https://provider.test/v1/",
+                transport=transport,
+            )
+
+        async def close(self):
+            await self._client.aclose()
+
+    def factory(provider_id, *, transport=None):
+        return FakeProvider(transport)
+
+    monkeypatch.setattr("app.services.model_router.make_provider", factory)
 
     def transport(request):
         return httpx.Response(
