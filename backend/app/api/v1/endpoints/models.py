@@ -40,7 +40,7 @@ class Route(BaseModel):
 
 
 class Pool(BaseModel):
-    routes: list[Route] = Field(max_length=50)
+    routes: list[Route] = Field(max_length=1000)
 
 
 @router.get("/providers")

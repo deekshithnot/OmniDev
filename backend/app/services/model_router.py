@@ -13,6 +13,11 @@ from app.services.llm_providers import (
 )
 
 _cooldowns: dict[tuple[str, str], float] = {}
+_NON_CHAT_MODEL_HINTS = (
+    "embedding", "embed-", "rerank", "text-to-speech", "tts",
+    "speech", "transcription", "whisper", "stable-diffusion",
+    "image-generation", "text-to-video", "video-generation",
+)
 
 
 def pool_routes():
@@ -42,18 +47,28 @@ def configured(provider_id, config):
     )
 
 
+def _model_capabilities(item, model_id):
+    """Classify catalog entries so non-chat endpoints never enter the chat router."""
+    modalities = item.get("architecture", {}).get("modality") if isinstance(item.get("architecture"), dict) else None
+    if isinstance(modalities, str) and "->" in modalities:
+        input_mode, output_mode = modalities.split("->", 1)
+        if "text" in output_mode.lower():
+            return ["chat"]
+        return []
+    model_type = str(item.get("type", "")).lower()
+    if model_type and model_type not in {"chat", "language", "text-generation"}:
+        return []
+    normalized = model_id.lower()
+    if any(hint in normalized for hint in _NON_CHAT_MODEL_HINTS):
+        return []
+    return ["chat"]
+
+
 async def discover_models(provider_id, *, transport=None):
     if provider_id == "builtin":
-        return [
-            {
-                "id": "auto",
-                "name": "Automatic · your saved fallback order",
-                "free": None,
-            }
-        ]
+        return [{"id": "auto", "name": "Automatic · your saved fallback order", "free": None, "capabilities": ["chat"]}]
     provider = make_provider(provider_id, transport=transport)
     try:
-        # Cohere v2 chat uses its separate v1 model listing API.
         url = (
             "https://api.cohere.com/v1/models?endpoint=chat"
             if provider_id == "cohere"
@@ -73,25 +88,19 @@ async def discover_models(provider_id, *, transport=None):
             free = None
             if "prompt" in pricing and "completion" in pricing:
                 try:
-                    free = (
-                        Decimal(str(pricing["prompt"])) == 0
-                        and Decimal(str(pricing["completion"])) == 0
-                    )
+                    free = Decimal(str(pricing["prompt"])) == 0 and Decimal(str(pricing["completion"])) == 0
                 except InvalidOperation:
                     free = None
-            models.append(
-                {
-                    "id": name,
-                    "name": item.get("name")
-                    if isinstance(item.get("name"), str)
-                    else name,
-                    "free": free,
-                }
-            )
-        return sorted(models, key=lambda m: m["id"])
+            models.append({
+                "id": name,
+                "name": item.get("name") if isinstance(item.get("name"), str) else name,
+                "free": free,
+                "capabilities": _model_capabilities(item, name),
+            })
+        return sorted(models, key=lambda model: model["id"])
     except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
         raise ProviderError(
-            "Could not load models. Check the provider key and service; a model ID can also be entered manually."
+            "Could not load models. Check the provider key and service."
         ) from exc
     finally:
         await provider.close()
@@ -101,13 +110,13 @@ class ModelPool:
     def __init__(self, config, transport=None):
         self.config, self.transport = config, transport
         self.routes = [
-            r
-            for r in pool_routes()
-            if r.get("enabled", True) and configured(r["provider"], config)
+            route
+            for route in pool_routes()
+            if route.get("enabled", True) and configured(route["provider"], config)
         ]
         if not self.routes:
             raise MissingProviderCredential(
-                "Open Models, set up a provider and add a model to the built-in router."
+                "Open Models and add a provider key to discover chat models automatically."
             )
 
     def candidates(self, model):
@@ -116,9 +125,8 @@ class ModelPool:
                 "The built-in router uses model 'auto'. Choose a provider to select a specific model."
             )
         available = [
-            r
-            for r in self.routes
-            if _cooldowns.get((r["provider"], r["model"]), 0) <= time.monotonic()
+            route for route in self.routes
+            if _cooldowns.get((route["provider"], route["model"]), 0) <= time.monotonic()
         ]
         if not available:
             raise ProviderRateLimitError(
@@ -131,27 +139,15 @@ class ModelPool:
         for route in self.candidates(model):
             provider = None
             try:
-                provider = make_provider(
-                    route["provider"], self.config, transport=self.transport
-                )
-                provider.max_retries = 0  # Move to the next candidate promptly.
+                provider = make_provider(route["provider"], self.config, transport=self.transport)
+                provider.max_retries = 0
                 data = await provider.chat_completion(model=route["model"], **kwargs)
-                if (
-                    not isinstance(data, dict)
-                    or not isinstance(data.get("choices"), list)
-                    or not data["choices"]
-                ):
+                if not isinstance(data, dict) or not isinstance(data.get("choices"), list) or not data["choices"]:
                     raise ProviderError("Provider returned an invalid completion")
                 return {**data, "routed_provider": route["provider"]}
             except (ProviderError, ValueError, TypeError) as exc:
-                last = (
-                    exc
-                    if isinstance(exc, ProviderError)
-                    else ProviderError("Provider returned an invalid response")
-                )
-                _cooldowns[(route["provider"], route["model"])] = time.monotonic() + (
-                    30 if isinstance(exc, ProviderRateLimitError) else 5
-                )
+                last = exc if isinstance(exc, ProviderError) else ProviderError("Provider returned an invalid response")
+                _cooldowns[(route["provider"], route["model"])] = time.monotonic() + (30 if isinstance(exc, ProviderRateLimitError) else 5)
             finally:
                 if provider:
                     await provider.close()
@@ -162,24 +158,18 @@ class ModelPool:
         for route in self.candidates(model):
             provider, emitted = None, False
             try:
-                provider = make_provider(
-                    route["provider"], self.config, transport=self.transport
-                )
+                provider = make_provider(route["provider"], self.config, transport=self.transport)
                 provider.max_retries = 0
-                async for chunk in provider.chat_completion_stream(
-                    model=route["model"], **kwargs
-                ):
+                async for chunk in provider.chat_completion_stream(model=route["model"], **kwargs):
                     if not isinstance(chunk, dict) or "error" in chunk:
                         raise ProviderError("Provider returned an invalid stream event")
                     emitted = True
                     yield {**chunk, "routed_provider": route["provider"]}
                 return
             except ProviderError as exc:
-                _cooldowns[(route["provider"], route["model"])] = time.monotonic() + (
-                    30 if isinstance(exc, ProviderRateLimitError) else 5
-                )
+                _cooldowns[(route["provider"], route["model"])] = time.monotonic() + (30 if isinstance(exc, ProviderRateLimitError) else 5)
                 if emitted:
-                    raise  # Never splice two different model responses together.
+                    raise
                 last = exc
             finally:
                 if provider:

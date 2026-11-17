@@ -221,3 +221,45 @@ async def test_pool_falls_back_on_malformed_provider_response(client):
         "routed_provider"
     ] == "cerebras"
     assert calls == ["fast", "backup"]
+
+
+
+@pytest.mark.parametrize(
+    "item,model_id,expected",
+    [
+        ({"architecture": {"modality": "text->text"}}, "vendor/model", ["chat"]),
+        ({"architecture": {"modality": "text->audio"}}, "vendor/model", []),
+        ({}, "vendor/whisper-large", []),
+        ({}, "vendor/tts-1", []),
+        ({}, "vendor/embedding-large", []),
+        ({"type": "embedding"}, "vendor/model", []),
+        ({}, "vendor/general-instruct", ["chat"]),
+    ],
+)
+def test_model_catalog_classifies_chat_capability(item, model_id, expected):
+    from app.services.model_router import _model_capabilities
+
+    assert _model_capabilities(item, model_id) == expected
+
+
+@pytest.mark.asyncio
+async def test_discovery_marks_non_chat_models_for_separate_capability_routing():
+    from app.services.model_router import discover_models
+
+    def transport(request):
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "vendor/chat-model", "architecture": {"modality": "text->text"}},
+                    {"id": "vendor/voice-tts", "architecture": {"modality": "text->audio"}},
+                    {"id": "vendor/whisper-large"},
+                ]
+            },
+        )
+
+    models = await discover_models("groq", transport=httpx.MockTransport(transport))
+    by_id = {model["id"]: model for model in models}
+    assert by_id["vendor/chat-model"]["capabilities"] == ["chat"]
+    assert by_id["vendor/voice-tts"]["capabilities"] == []
+    assert by_id["vendor/whisper-large"]["capabilities"] == []
