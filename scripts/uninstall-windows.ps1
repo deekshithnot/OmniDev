@@ -1,28 +1,29 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Removes the OmniDev Windows MSI and, with explicit confirmation, its local data.
+    Interactive complete uninstaller for OmniDev on Windows.
 
 .DESCRIPTION
-    Windows Installer removes the application files. This script additionally
-    removes the engine home (SQLite database, credentials, logs and default
-    projects). A project root configured outside the engine home is preserved
-    unless its exact path is separately confirmed with -DeleteExternalProjects.
+    Option 1 removes the Windows MSI and preserves all user data.
+    Option 2 removes the Windows MSI, engine data, credentials, logs,
+    default projects, app-specific WebView2 profile, and configured projects.
 
-    Run from a normal PowerShell session. Windows Installer may request elevation.
+    A project folder outside the engine home is shown and requires the user
+    to type its exact path before it can be deleted. The shared WebView2
+    runtime and data belonging to other applications are never removed.
+
+    Run this script as the Windows account that owns the OmniDev installation.
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
-param(
-    [switch]$KeepUserData,
-    [switch]$DeleteUserData,
-    [switch]$DeleteExternalProjects
-)
+param()
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$script:TauriIdentifier = 'com.omnidev.desktop'
 
-if ($KeepUserData -and ($DeleteUserData -or $DeleteExternalProjects)) {
-    throw 'KeepUserData cannot be combined with a data-deletion option.'
+function Get-NormalizedPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    return [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
 }
 
 function Resolve-OmniDevPath {
@@ -36,7 +37,6 @@ function Resolve-OmniDevPath {
         ($resolved.StartsWith("'") -and $resolved.EndsWith("'"))) {
         $resolved = $resolved.Substring(1, $resolved.Length - 2)
     }
-
     if (-not [System.IO.Path]::IsPathRooted($resolved)) {
         $resolved = Join-Path $BasePath $resolved
     }
@@ -46,16 +46,23 @@ function Resolve-OmniDevPath {
 function Assert-SafeDeletionPath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    $fullPath = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $fullPath = Get-NormalizedPath -Path $Path
     $driveRoot = [System.IO.Path]::GetPathRoot($fullPath).TrimEnd('\')
-    $userProfile = [System.IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd('\')
-    $windowsDirectory = [System.IO.Path]::GetFullPath($env:WINDIR).TrimEnd('\')
+    $userProfile = Get-NormalizedPath -Path $env:USERPROFILE
+    $windowsDirectory = Get-NormalizedPath -Path $env:WINDIR
 
     if ([string]::IsNullOrWhiteSpace($fullPath) -or
         $fullPath -eq $driveRoot -or
         $fullPath -eq $userProfile -or
         $fullPath -eq $windowsDirectory) {
         throw "Refusing to remove a protected or dangerously broad path: $Path"
+    }
+
+    if (Test-Path -LiteralPath $fullPath) {
+        $item = Get-Item -LiteralPath $fullPath -Force
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Refusing to recursively remove a junction or symbolic link: $fullPath"
+        }
     }
 }
 
@@ -65,8 +72,8 @@ function Test-PathInside {
         [Parameter(Mandatory = $true)][string]$Parent
     )
 
-    $fullPath = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
-    $fullParent = [System.IO.Path]::GetFullPath($Parent).TrimEnd('\')
+    $fullPath = Get-NormalizedPath -Path $Path
+    $fullParent = Get-NormalizedPath -Path $Parent
     return $fullPath.Equals($fullParent, [System.StringComparison]::OrdinalIgnoreCase) -or
         $fullPath.StartsWith($fullParent + '\', [System.StringComparison]::OrdinalIgnoreCase)
 }
@@ -94,14 +101,14 @@ function Get-ConfiguredProjectRoot {
 }
 
 function Get-InstalledOmniDevMsi {
-    $registryLocations = @(
+    $locations = @(
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
         'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
         'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
     )
-
     $seen = @{}
-    foreach ($location in $registryLocations) {
+
+    foreach ($location in $locations) {
         $entries = Get-ItemProperty -Path $location -ErrorAction SilentlyContinue |
             Where-Object { $_.DisplayName -eq 'OmniDev' }
 
@@ -113,9 +120,8 @@ function Get-InstalledOmniDevMsi {
             elseif ($entry.UninstallString -match '\{[0-9A-Fa-f-]{36}\}') {
                 $productCode = $Matches[0]
             }
-
             if (-not $productCode) {
-                throw "Found an OmniDev uninstall entry but could not read its MSI product code: $($entry.DisplayName)"
+                throw "Could not read the MSI product code for $($entry.DisplayName)."
             }
             if (-not $seen.ContainsKey($productCode)) {
                 $seen[$productCode] = $true
@@ -128,8 +134,28 @@ function Get-InstalledOmniDevMsi {
     }
 }
 
-if ([string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
-    throw 'USERPROFILE is not available. Run this script in the Windows user account that owns the OmniDev installation.'
+function Stop-OmniDevBeforeRemoval {
+    $desktopProcesses = @(Get-Process -Name 'OmniDev' -ErrorAction SilentlyContinue)
+    foreach ($process in $desktopProcesses) {
+        if ($process.MainWindowHandle -ne 0) {
+            [void]$process.CloseMainWindow()
+        }
+    }
+
+    if ($desktopProcesses.Count -gt 0) {
+        Start-Sleep -Seconds 3
+    }
+
+    $remainingDesktop = @(Get-Process -Name 'OmniDev' -ErrorAction SilentlyContinue)
+    $engineProcesses = @(Get-Process -Name 'omnidev-cli' -ErrorAction SilentlyContinue)
+    if ($remainingDesktop.Count -gt 0 -or $engineProcesses.Count -gt 0) {
+        throw 'Close OmniDev and stop any manually started omnidev-cli engine, then run the uninstaller again. No user data has been removed.'
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($env:USERPROFILE) -or
+    [string]::IsNullOrWhiteSpace($env:WINDIR)) {
+    throw 'Required Windows environment paths are unavailable.'
 }
 
 $customHome = -not [string]::IsNullOrWhiteSpace($env:OMNIDEV_HOME)
@@ -141,23 +167,87 @@ else {
 }
 Assert-SafeDeletionPath -Path $dataHome
 
+$projectRoot = Get-ConfiguredProjectRoot -HomePath $dataHome
+$externalProjectRoot = -not (Test-PathInside -Path $projectRoot -Parent $dataHome)
+if ($externalProjectRoot -and (Test-PathInside -Path $dataHome -Parent $projectRoot)) {
+    throw "The configured project root is a parent of the OmniDev data folder. Refusing unsafe deletion: $projectRoot"
+}
+
+$localAppData = [Environment]::GetFolderPath([System.Environment+SpecialFolder]::LocalApplicationData)
+$roamingAppData = [Environment]::GetFolderPath([System.Environment+SpecialFolder]::ApplicationData)
+$dataPaths = @(
+    $dataHome,
+    (Join-Path $localAppData $script:TauriIdentifier),
+    (Join-Path $roamingAppData $script:TauriIdentifier)
+) | Select-Object -Unique
+
 Write-Host ''
-Write-Host 'OmniDev complete uninstaller' -ForegroundColor Cyan
-Write-Host "Data location: $dataHome"
+Write-Host 'OMNIDEV UNINSTALLER' -ForegroundColor Cyan
+Write-Host 'Choose what to remove:'
 Write-Host ''
+Write-Host '  [1] Remove OmniDev application only'
+Write-Host '      Keep projects, API keys, database, chat history, settings and caches.'
+Write-Host ''
+Write-Host '  [2] Remove OmniDev application AND ALL OmniDev data'
+Write-Host '      Remove projects, API keys, database, chat history, settings, logs,'
+Write-Host '      connection tokens, app-specific WebView data and caches.'
+Write-Host ''
+if ($externalProjectRoot) {
+    Write-Host "  Custom project folder detected: $projectRoot" -ForegroundColor Yellow
+    Write-Host '  Option 2 will offer to delete this folder after showing its exact path.'
+    Write-Host ''
+}
+Write-Host 'The shared Microsoft Edge WebView2 runtime will not be removed.'
+Write-Host ''
+
+$choice = Read-Host 'Enter 1 or 2'
+if ($choice -notin @('1', '2')) {
+    Write-Host 'Uninstall cancelled. Nothing was changed.' -ForegroundColor Yellow
+    return
+}
+
+if ($choice -eq '2') {
+    Write-Host ''
+    Write-Host 'The following OmniDev data locations will be removed if they exist:'
+    foreach ($path in $dataPaths) {
+        Write-Host "  - $path"
+    }
+    if ($externalProjectRoot) {
+        Write-Host "  - Custom project folder: $projectRoot"
+    }
+    Write-Host ''
+    $confirmation = Read-Host 'Type DELETE ALL OMNIDEV DATA to continue'
+    if ($confirmation -cne 'DELETE ALL OMNIDEV DATA') {
+        Write-Host 'Uninstall cancelled. Nothing was changed.' -ForegroundColor Yellow
+        return
+    }
+
+    if ($externalProjectRoot -and (Test-Path -LiteralPath $projectRoot)) {
+        Write-Host ''
+        Write-Warning 'This project folder is outside the OmniDev data directory.'
+        Write-Host "Project folder: $projectRoot"
+        $projectConfirmation = Read-Host 'Type the exact project path to include it in the deletion'
+        if ($projectConfirmation -cne $projectRoot) {
+            Write-Host 'Custom projects will be preserved. OmniDev app and its internal data can still be removed.'
+            $externalProjectRoot = $false
+        }
+    }
+}
+
+Stop-OmniDevBeforeRemoval
 
 $installed = @(Get-InstalledOmniDevMsi)
 if ($installed.Count -eq 0) {
-    Write-Host 'No registered OmniDev MSI was found. Continuing with the data cleanup step.'
+    Write-Host 'No registered OmniDev MSI was found. Continuing with the selected data option.'
 }
 else {
     foreach ($app in $installed) {
-        Write-Host "Removing $($app.DisplayName) ($($app.ProductCode))..."
+        Write-Host "Uninstalling $($app.DisplayName)..."
         if ($PSCmdlet.ShouldProcess($app.ProductCode, 'Uninstall OmniDev Windows Installer package')) {
             $msiexec = Join-Path $env:WINDIR 'System32\msiexec.exe'
             $result = Start-Process -FilePath $msiexec -ArgumentList @('/x', $app.ProductCode, '/passive', '/norestart') -Wait -PassThru
             if ($result.ExitCode -notin @(0, 1605, 3010)) {
-                throw "Windows Installer returned exit code $($result.ExitCode). User data was not removed."
+                throw "Windows Installer returned exit code $($result.ExitCode). Data cleanup was stopped."
             }
             if ($result.ExitCode -eq 3010) {
                 Write-Warning 'Windows requested a restart to finish removing the application.'
@@ -166,62 +256,29 @@ else {
     }
 }
 
-if ($KeepUserData) {
-    Write-Host "Keeping all OmniDev data at: $dataHome" -ForegroundColor Yellow
-    Write-Host 'The application uninstall step is complete.'
+if ($choice -eq '1') {
+    Write-Host ''
+    Write-Host 'OmniDev application removed. Your projects, API keys and all user data were kept.' -ForegroundColor Green
     return
 }
 
-if (Test-Path -LiteralPath $dataHome) {
-    if (-not $DeleteUserData -and -not $WhatIfPreference) {
-        if ($customHome) {
-            $expectedConfirmation = $dataHome
-            Write-Warning 'OMNIDEV_HOME points to a custom folder.'
-            $prompt = 'Type the full data path shown above to permanently delete it'
+foreach ($path in $dataPaths) {
+    if (Test-Path -LiteralPath $path) {
+        Assert-SafeDeletionPath -Path $path
+        if ($PSCmdlet.ShouldProcess($path, 'Permanently delete OmniDev-owned data and app-specific WebView profile')) {
+            Remove-Item -LiteralPath $path -Recurse -Force
+            Write-Host "Removed: $path" -ForegroundColor Green
         }
-        else {
-            $expectedConfirmation = 'DELETE ALL OMNIDEV DATA'
-            $prompt = 'Type DELETE ALL OMNIDEV DATA to permanently remove the database, credentials, logs and default projects'
-        }
-
-        $confirmation = Read-Host $prompt
-        if ($confirmation -cne $expectedConfirmation) {
-            Write-Host "User data was kept at: $dataHome" -ForegroundColor Yellow
-            return
-        }
-    }
-
-    if ($PSCmdlet.ShouldProcess($dataHome, 'Permanently delete OmniDev database, credentials, logs and files')) {
-        Remove-Item -LiteralPath $dataHome -Recurse -Force
-        Write-Host "Removed OmniDev data: $dataHome" -ForegroundColor Green
     }
 }
-else {
-    Write-Host 'No OmniDev data folder was found.'
-}
 
-$projectRoot = Get-ConfiguredProjectRoot -HomePath $dataHome
-if (-not (Test-PathInside -Path $projectRoot -Parent $dataHome)) {
-    if ($DeleteExternalProjects -and (Test-Path -LiteralPath $projectRoot)) {
-        Assert-SafeDeletionPath -Path $projectRoot
-        Write-Warning "A custom project folder is outside the OmniDev data folder: $projectRoot"
-        if (-not $WhatIfPreference) {
-            $projectConfirmation = Read-Host 'Type the exact custom project path to permanently delete it'
-            if ($projectConfirmation -cne $projectRoot) {
-                Write-Host "Custom project files were kept at: $projectRoot" -ForegroundColor Yellow
-                return
-            }
-        }
-        if ($PSCmdlet.ShouldProcess($projectRoot, 'Permanently delete the external project folder')) {
-            Remove-Item -LiteralPath $projectRoot -Recurse -Force
-            Write-Host "Removed custom project folder: $projectRoot" -ForegroundColor Green
-        }
-    }
-    else {
-        Write-Host "Preserved custom project folder outside OmniDev data: $projectRoot" -ForegroundColor Yellow
-        Write-Host 'To remove it too, rerun with -DeleteExternalProjects and confirm its exact path.'
+if ($externalProjectRoot -and (Test-Path -LiteralPath $projectRoot)) {
+    Assert-SafeDeletionPath -Path $projectRoot
+    if ($PSCmdlet.ShouldProcess($projectRoot, 'Permanently delete the separately confirmed custom project folder')) {
+        Remove-Item -LiteralPath $projectRoot -Recurse -Force
+        Write-Host "Removed custom project folder: $projectRoot" -ForegroundColor Green
     }
 }
 
 Write-Host ''
-Write-Host 'OmniDev uninstall finished.' -ForegroundColor Green
+Write-Host 'OmniDev and its selected data have been removed.' -ForegroundColor Green
