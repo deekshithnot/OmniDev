@@ -87,6 +87,15 @@ jobs:
           if (!$Shortcuts) { throw 'OmniDev Start menu shortcut is missing' }
           python scripts/smoke_desktop_windows.py "$env:LOCALAPPDATA/OmniDev/omnidev.exe"
           if ($LASTEXITCODE -ne 0) { throw 'Desktop smoke failed' }
+      - name: Validate and stage the Windows uninstaller
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'scripts/uninstall-windows.ps1'), [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors) { $parseErrors | Format-List | Out-String | Write-Error }
+          New-Item -ItemType Directory -Path dist/uninstaller -Force | Out-Null
+          Copy-Item scripts/uninstall-windows.ps1 dist/uninstaller/OmniDev-Windows-Uninstaller.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: OmniDev-Windows
@@ -94,6 +103,7 @@ jobs:
             apps/desktop/src-tauri/target/release/bundle/msi/*.msi
             dist/OmniDev-Windows-CLI.zip
             dist/*.whl
+            dist/uninstaller/OmniDev-Windows-Uninstaller.ps1
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [application, desktop, windows-desktop, dependency-audit]
@@ -128,7 +138,9 @@ jobs:
           find packages/OmniDev-Windows -name 'OmniDev-Windows-CLI.zip' -exec cp {} release/ \;
           cp packages/omnidev-python/*.whl release/
           cp packages/omnidev-linux-desktop/*.deb release/
+          cp packages/OmniDev-Windows/OmniDev-Windows-Uninstaller.ps1 release/
           test -f release/OmniDev-Windows-CLI.zip
+          test -f release/OmniDev-Windows-Uninstaller.ps1
           (cd release && sha256sum * > SHA256SUMS)
           python scripts/publish_release.py
 
