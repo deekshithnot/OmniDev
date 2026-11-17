@@ -83,6 +83,22 @@ fn stop_engine(engine: &Engine) {
     if let Some(path) = &engine.connection_file { let _ = std::fs::remove_file(path); }
 }
 
+
+#[tauri::command]
+fn open_paint() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("mspaint.exe")
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("Could not open Microsoft Paint: {error}"))
+    }
+    #[cfg(not(windows))]
+    {
+        Err("Teach Mode's Paint integration is available on Windows only.".to_string())
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -97,7 +113,7 @@ fn main() {
             app.manage(engine);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![desktop_connection, engine_ready, export_text])
+        .invoke_handler(tauri::generate_handler![desktop_connection, engine_ready, export_text, open_paint])
         .build(tauri::generate_context!()).expect("Unable to start OmniDev")
         .run(|app, event| { if let tauri::RunEvent::Exit = event { stop_engine(&app.state::<Engine>()); } });
 }
