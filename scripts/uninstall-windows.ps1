@@ -109,25 +109,41 @@ function Get-InstalledOmniDevMsi {
     $seen = @{}
 
     foreach ($location in $locations) {
-        $entries = Get-ItemProperty -Path $location -ErrorAction SilentlyContinue |
-            Where-Object { $_.DisplayName -eq 'OmniDev' }
+        $entries = @(Get-ItemProperty -Path $location -ErrorAction SilentlyContinue)
 
         foreach ($entry in $entries) {
+            # Uninstall registry keys are not uniform: Windows and other
+            # applications create entries without DisplayName or MSI fields.
+            # Under StrictMode, direct access to a missing property throws.
+            $displayNameProperty = $entry.PSObject.Properties['DisplayName']
+            if ($null -eq $displayNameProperty -or
+                $displayNameProperty.Value -ne 'OmniDev') {
+                continue
+            }
+
             $productCode = $null
-            if ($entry.PSChildName -match '^\{[0-9A-Fa-f-]{36}\}$') {
-                $productCode = $entry.PSChildName
+            $childNameProperty = $entry.PSObject.Properties['PSChildName']
+            if ($null -ne $childNameProperty -and
+                $childNameProperty.Value -match '^\{[0-9A-Fa-f-]{36}\}$') {
+                $productCode = $childNameProperty.Value
             }
-            elseif ($entry.UninstallString -match '\{[0-9A-Fa-f-]{36}\}') {
-                $productCode = $Matches[0]
+            else {
+                $uninstallProperty = $entry.PSObject.Properties['UninstallString']
+                if ($null -ne $uninstallProperty -and
+                    $uninstallProperty.Value -match '\{[0-9A-Fa-f-]{36}\}') {
+                    $productCode = $Matches[0]
+                }
             }
+
             if (-not $productCode) {
-                throw "Could not read the MSI product code for $($entry.DisplayName)."
+                throw "Found OmniDev in the uninstall registry but could not read its MSI product code."
             }
+
             if (-not $seen.ContainsKey($productCode)) {
                 $seen[$productCode] = $true
                 [pscustomobject]@{
                     ProductCode = $productCode
-                    DisplayName = $entry.DisplayName
+                    DisplayName = 'OmniDev'
                 }
             }
         }
