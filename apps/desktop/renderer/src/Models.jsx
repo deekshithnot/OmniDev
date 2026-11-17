@@ -1,52 +1,85 @@
 import React, { useEffect, useState } from "react";
 import { request } from "./services/api";
 import { downloadText } from "./services/download";
+
 export default function Models({ act, refresh, busy }) {
-  const [providers, setProviders] = useState([]),
-    [selected, setSelected] = useState("groq");
-  const [models, setModels] = useState([]),
-    [routes, setRoutes] = useState([]),
-    [chosen, setChosen] = useState("");
-  const [search, setSearch] = useState(""),
-    [freeOnly, setFreeOnly] = useState(true);
+  const [providers, setProviders] = useState([]);
+  const [selected, setSelected] = useState("groq");
+  const [models, setModels] = useState([]);
+  const [routes, setRoutes] = useState([]);
+  const [search, setSearch] = useState("");
+
   async function load() {
-    const [p, pool] = await Promise.all([
+    const [availableProviders, pool] = await Promise.all([
       request("/models/providers"),
       request("/models/pool"),
     ]);
-    setProviders(p);
-    if (!p.find(item => item.id === selected)?.configured) setSelected(p.find(item => item.configured && item.id !== "ollama")?.id || selected);
+    setProviders(availableProviders);
     setRoutes(pool.routes);
+    if (!availableProviders.find(item => item.id === selected)?.configured) {
+      setSelected(availableProviders.find(item => item.configured && item.id !== "ollama")?.id || selected);
+    }
     await refresh();
   }
-  useEffect(() => {
-    act(load);
-  }, []);
-  const current = providers.find((p) => p.id === selected);
+
+  useEffect(() => { act(load); }, []);
+
+  const current = providers.find(provider => provider.id === selected);
+
   useEffect(() => {
     setModels([]);
-    setChosen("");
     if (!current?.configured) return;
     let active = true;
-    request(`/models/catalog/${selected}`).then(data => { if (active) setModels(data.models); }).catch(() => { /* Explicit refresh reports discovery errors through act. */ });
+    request(`/models/catalog/${selected}`)
+      .then(data => { if (active) setModels(data.models || []); })
+      .catch(() => { if (active) setModels([]); });
     return () => { active = false; };
   }, [selected, current?.configured]);
-  async function discover() {
-    setModels((await request(`/models/catalog/${selected}`)).models);
-  }
+
   async function savePool(next) {
     await request("/models/pool", "PUT", { routes: next });
     setRoutes(next);
     await refresh();
   }
+
+  async function discoverAndRegister(providerId) {
+    const catalog = await request(`/models/catalog/${providerId}`);
+    const chatModels = (catalog.models || []).filter(model => model.capabilities?.includes("chat"));
+    const latestPool = await request("/models/pool");
+    const existing = new Set(latestPool.routes.map(route => `${route.provider}:${route.model}`));
+    const additions = chatModels
+      .filter(model => !existing.has(`${providerId}:${model.id}`))
+      .map(model => ({ provider: providerId, model: model.id, enabled: true }));
+    if (additions.length) {
+      await request("/models/pool", "PUT", { routes: [...latestPool.routes, ...additions] });
+    }
+    setModels(catalog.models || []);
+    await load();
+    return { discovered: catalog.models?.length || 0, added: additions.length };
+  }
+
+  async function saveProvider(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    const providerId = selected;
+    await request(`/models/providers/${providerId}`, "PUT", {
+      api_key: values.get("key") || "",
+      account_id: values.get("account") || "",
+    });
+    form.reset();
+    const result = await discoverAndRegister(providerId);
+    return result;
+  }
+
   return (
     <div className="settings-page">
       <span className="eyebrow">BUILT INTO OMNIDEV</span>
       <h2>Models & keys</h2>
       <p>
-        Set up providers here, browse their live models, and choose your
-        fallback order. Cloud providers still require your own keys and their
-        quotas apply. Free-tier availability depends on your account.
+        Add a provider key once. OmniDev discovers its available chat models and
+        adds them to automatic routing. Speech, embedding and other non-chat
+        models stay out of the chat router.
       </p>
       <div className="toolbar">
         <button type="button" disabled={busy || !models.length} onClick={() => act(() => downloadText(`omnidev-${selected}-catalog.json`, JSON.stringify(models, null, 2), "application/json"))}>↓ Download model catalog</button>
@@ -57,219 +90,75 @@ export default function Models({ act, refresh, busy }) {
           <h3>1. Set up a provider</h3>
           <label>
             Provider
-            <select
-              aria-label="Set up provider"
-              value={selected}
-              onChange={(e) => {
-                setSelected(e.target.value);
-                setModels([]);
-                setChosen("");
-              }}
-            >
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                  {p.configured ? " · ready" : ""}
+            <select aria-label="Set up provider" value={selected} onChange={event => setSelected(event.target.value)}>
+              {providers.map(provider => (
+                <option key={provider.id} value={provider.id}>
+                  {provider.name}{provider.configured ? " · ready" : ""}
                 </option>
               ))}
             </select>
           </label>
-          {current && (
-            <>
-              <p>
-                <span className="badge">
-                  {current.tier.replaceAll("_", " ")}
-                </span>
-                {current.configured
-                  ? "Provider configured"
-                  : "Provider setup needed"}{" "}
-                ·{" "}
-                <a href={current.signup_url} target="_blank" rel="noreferrer">
-                  Provider website ↗
-                </a>
-              </p>
-              <form
-                className="form"
-                key={selected}
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const el = e.currentTarget;
-                  const f = new FormData(el);
-                  act(async () => {
-                    await request(`/models/providers/${selected}`, "PUT", {
-                      api_key: f.get("key") || "",
-                      account_id: f.get("account") || "",
-                    });
-                    el.reset();
-                    await load();
-                  });
-                }}
-              >
-                <label>
-                  API key
-                  <input
-                    aria-label="Provider API key"
-                    name="key"
-                    type="password"
-                    autoComplete="off"
-                    placeholder="Blank keeps a saved key"
-                  />
-                </label>
-                {current.account_id_required && (
-                  <label>
-                    Account ID
-                    <input name="account" required />
-                  </label>
-                )}
-                <div className="toolbar">
-                  <button disabled={busy}>Save provider</button>
-                  <button
-                    disabled={busy}
-                    type="button"
-                    onClick={() =>
-                      act(async () => {
-                        await request(
-                          `/models/providers/${selected}`,
-                          "DELETE",
-                        );
-                        await load();
-                      })
-                    }
-                  >
-                    Remove saved key
-                  </button>
-                </div>
-              </form>
-            </>
-          )}
-          <h3>2. Choose models</h3>
-          <button disabled={busy} onClick={() => act(discover)}>
-            Load available models
-          </button>
+          {current && <>
+            <p>
+              <span className="badge">{current.tier.replaceAll("_", " ")}</span>
+              {current.configured ? "Provider configured" : "Provider setup needed"} ·{" "}
+              <a href={current.signup_url} target="_blank" rel="noreferrer">Provider website ↗</a>
+            </p>
+            <form className="form" key={selected} onSubmit={event => {
+              event.preventDefault();
+              act(() => saveProvider(event));
+            }}>
+              <label>
+                API key
+                <input aria-label="Provider API key" name="key" type="password" autoComplete="off" placeholder="Blank keeps a saved key" />
+              </label>
+              {current.account_id_required && <label>Account ID<input name="account" required /></label>}
+              <div className="toolbar">
+                <button disabled={busy}>Save key & discover models</button>
+                <button disabled={busy} type="button" onClick={() => act(async () => {
+                  await request(`/models/providers/${selected}`, "DELETE");
+                  await load();
+                })}>Remove saved key</button>
+              </div>
+            </form>
+            {current.configured && <button type="button" disabled={busy} onClick={() => act(() => discoverAndRegister(selected))}>↻ Refresh and sync models</button>}
+          </>}
           <label>
-            Filter models
-            <input
-              aria-label="Filter models"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
+            Filter discovered models
+            <input aria-label="Filter discovered models" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search the provider catalog" />
           </label>
-          {selected === "openrouter" && (
-            <label>
-              <input
-                type="checkbox"
-                checked={freeOnly}
-                onChange={(e) => setFreeOnly(e.target.checked)}
-              />{" "}
-              Show models listed with free input and output
-            </label>
-          )}
-          <select
-            aria-label="Available models"
-            size="7"
-            value={chosen}
-            onChange={(e) => setChosen(e.target.value)}
-          >
-            <option value="" disabled>
-              Select a model
-            </option>
-            {models
-              .filter(
-                (m) =>
-                  m.id.toLowerCase().includes(search.toLowerCase()) &&
-                  (selected !== "openrouter" || !freeOnly || m.free === true),
-              )
-              .map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name} ({m.id}){m.free === true ? " · free" : ""}
-                </option>
-              ))}
-          </select>
-          <label>
-            Selected model ID
-            <input
-              aria-label="Selected model ID"
-              value={chosen}
-              onChange={(e) => setChosen(e.target.value)}
-              placeholder="Select above or enter the provider's model ID"
-            />
-          </label>
-          <button
-            disabled={
-              busy ||
-              !chosen.trim() ||
-              routes.some(
-                (r) => r.provider === selected && r.model === chosen.trim(),
-              )
-            }
-            onClick={() =>
-              act(() =>
-                savePool([
-                  ...routes,
-                  { provider: selected, model: chosen.trim(), enabled: true },
-                ]),
-              )
-            }
-          >
-            Add to built-in router
-          </button>
+          <p className="muted">{models.filter(model => model.id.toLowerCase().includes(search.toLowerCase())).length} matching models · chat-capable models are automatically routed</p>
+          <div className="model-catalog-list">
+            {models.filter(model => model.id.toLowerCase().includes(search.toLowerCase())).slice(0, 100).map(model => (
+              <div key={model.id} className="model-catalog-row">
+                <span>{model.name || model.id}</span>
+                <small>{model.capabilities?.includes("chat") ? "Chat" : (model.capabilities || []).join(", ") || "Other"}</small>
+              </div>
+            ))}
+          </div>
         </div>
         <div>
-          <h3>3. Set your fallback order</h3>
+          <h3>2. Automatic model routing</h3>
           <p className="muted">
-            Choose “Automatic routing” and “Automatic” in Chat or
-            Agents. OmniDev tries these models in order, skips models cooling
-            down after errors, and falls back before a streamed response starts.
+            Every discovered chat-capable model is added automatically. OmniDev
+            tries enabled routes in order, skips models cooling down after errors,
+            and falls back before a streamed response starts.
           </p>
-          {!routes.length && (
-            <p>
-              No models added yet. Set up a provider and add a model to get
-              started.
-            </p>
-          )}
-          {routes.map((r, i) => (
-            <article key={r.provider + ":" + r.model}>
-              <h3>
-                {i + 1}. {r.model}
-              </h3>
-              <small>{r.provider}</small>
+          {!routes.length && <p>No models registered yet. Add a provider key to discover models automatically.</p>}
+          {routes.map((route, index) => (
+            <article key={route.provider + ":" + route.model}>
+              <h3>{index + 1}. {route.model}</h3>
+              <small>{route.provider}</small>
               <div className="toolbar">
                 <label>
-                  <input
-                    type="checkbox"
-                    checked={r.enabled}
-                    onChange={(e) =>
-                      act(() =>
-                        savePool(
-                          routes.map((v, n) =>
-                            n === i ? { ...v, enabled: e.target.checked } : v,
-                          ),
-                        ),
-                      )
-                    }
-                  />{" "}
-                  Enabled
+                  <input type="checkbox" checked={route.enabled} onChange={event => act(() => savePool(routes.map((item, position) => position === index ? { ...item, enabled: event.target.checked } : item)))} /> Enabled
                 </label>
-                <button
-                  disabled={busy || !i}
-                  onClick={() =>
-                    act(() => {
-                      const next = [...routes];
-                      [next[i - 1], next[i]] = [next[i], next[i - 1]];
-                      return savePool(next);
-                    })
-                  }
-                >
-                  Move up
-                </button>
-                <button
-                  disabled={busy}
-                  onClick={() =>
-                    act(() => savePool(routes.filter((_, n) => n !== i)))
-                  }
-                >
-                  Remove
-                </button>
+                <button disabled={busy || !index} onClick={() => act(() => {
+                  const next = [...routes];
+                  [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                  return savePool(next);
+                })}>Move up</button>
+                <button disabled={busy} onClick={() => act(() => savePool(routes.filter((_, position) => position !== index)))}>Remove</button>
               </div>
             </article>
           ))}
