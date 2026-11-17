@@ -48,7 +48,7 @@ def fresh(repo, tag):
 
 
 def managed(name):
-    return (name in {'OmniDev-Windows-x64.msi', 'OmniDev-Windows-CLI.zip', 'SHA256SUMS'}
+    return (name in {'OmniDev-Windows-x64.msi', 'OmniDev-Windows-CLI.zip', 'OmniDev-Windows-Uninstaller.ps1', 'SHA256SUMS'}
             or name.lower().startswith('omnidev') and name.endswith(('.whl', '.deb')))
 
 
