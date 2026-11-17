@@ -18,6 +18,7 @@ Download `OmniDev-Windows-x64.msi` from [GitHub Releases](https://github.com/not
 - Press the Windows key, search **OmniDev**, and open it. The engine starts automatically with the app. A second launch focuses the existing window. Closing the app stops its local engine.
 - Uninstall OmniDev using **Settings → Apps → Installed apps**. User data stays in `%USERPROFILE%\.omnidev` (or `OMNIDEV_HOME`), separate from installed program files.
 - For a guided uninstall, download `OmniDev-Windows-Uninstaller.ps1` from the same GitHub Release and run `powershell -NoProfile -ExecutionPolicy Bypass -File .\OmniDev-Windows-Uninstaller.ps1`. Choose **1** to remove only the app and keep all data, or **2** to remove the app plus OmniDev projects, provider keys, database, chat history, settings, logs and app-specific caches. Option 2 requires confirmation; custom project folders outside the OmniDev data directory require a second exact-path confirmation. The shared WebView2 runtime is kept.
+  The script targets the MSI installation and the engine/app-data locations configured for the current Windows user. It does not search every drive for manually extracted CLI copies, cloned source folders, Python virtual environments, or the original installer download; those are separate installs/downloads and must be removed separately.
 - The optional `OmniDev-Windows-CLI.zip` is for terminal users. Extract it and keep its executable and `_internal` folder together. The desktop installer already contains the engine and CLI.
 
 <!-- /coderabbit-ai-generated:v1 -->
