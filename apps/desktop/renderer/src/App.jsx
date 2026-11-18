@@ -9,6 +9,7 @@ import ResponseContent from "./ResponseContent";
 import { downloadText } from "./services/download";
 import { desktopConnection } from "./services/desktop";
 import Personalization, { loadAppearance } from "./Personalization";
+import TeachMode from "./TeachMode";
 const iconPaths = {
   Chat: "M4 4h16v12H9l-5 4z", Tasks: "m5 6 2 2 4-4M13 6h7M5 13h15M5 19h15",
   Agents: "M8 4h8v5H8zM4 15h5v5H4zM15 15h5v5h-5zM12 9v3M6 15v-3h12v3",
@@ -19,8 +20,8 @@ const iconPaths = {
   Settings: "M4 7h16M4 17h16M8 4v6M16 14v6",
 };
 function Icon({ name }) { return <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={iconPaths[name]} /></svg>; }
-const label = (view) => ({ Chat: "Chat", Tasks: "Activity", Models: "Models & keys" }[view] || view);
-const studioViews = ["Chat", "Agents", "OmniMode", "Tasks"];
+const label = (view) => ({ Chat: "Chat", Teach: "Teach Mode", Tasks: "Activity", Models: "Models & keys" }[view] || view);
+const studioViews = ["Chat", "Teach", "Agents", "OmniMode", "Tasks"];
 const workspaceViews = [
   "Files",
   "Terminal",
@@ -594,6 +595,7 @@ export default function App() {
               </div>
             </div>
           )}
+          {view === "Teach" && <TeachMode provider={provider} model={model} onSetup={() => setView("Models")} />}
           {view === "OmniMode" && (
             <OmniMode agents={agents} providers={providers} act={act} busy={busy} onSetup={() => setView("Models")} />
           )}

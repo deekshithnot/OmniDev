@@ -669,3 +669,34 @@ button.omnimode-run:disabled { opacity: .45; }
   .starter-list { margin-block: 15px; }
   .starter-list button { padding-block: 10px; }
 }
+
+/* Teach Mode */
+.teach-mode { max-width: 1040px; margin: 0 auto; padding: 28px clamp(16px, 4vw, 48px) 60px; overflow-y: auto; height: 100%; }
+.teach-intro { max-width: 680px; margin-bottom: 28px; }
+.teach-intro h2 { margin: 10px 0 8px; font-size: clamp(27px, 4vw, 38px); letter-spacing: -1.4px; }
+.teach-intro p { color: var(--muted); line-height: 1.65; margin: 0; }
+.teach-form { border: 1px solid var(--line); border-radius: 15px; background: var(--panel); padding: 20px; display: grid; gap: 12px; }
+.teach-form > label, .teach-form-row label { font-size: 12px; font-weight: 650; color: var(--muted); display: grid; gap: 8px; }
+.teach-form textarea { width: 100%; resize: vertical; min-height: 70px; border: 1px solid var(--line); border-radius: 9px; padding: 12px; background: var(--surface); color: var(--text); font: inherit; }
+.teach-form-row { display: flex; justify-content: space-between; align-items: end; gap: 14px; }
+.teach-form-row select { min-width: 210px; border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--surface); color: var(--text); }
+.teach-form button, .teach-controls button { border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; background: var(--surface); color: var(--text); cursor: pointer; font-weight: 600; }
+.teach-form button { background: var(--accent); color: white; border-color: transparent; }
+.teach-form button:disabled { opacity: .5; cursor: not-allowed; }
+.teach-empty { margin-top: 22px; border: 1px dashed var(--line); border-radius: 14px; padding: 24px; display: flex; flex-wrap: wrap; gap: 20px; color: var(--muted); }
+.teach-empty span { font-size: 10px; letter-spacing: 1px; font-weight: 700; }
+.teach-empty p { flex-basis: 100%; margin: 0; font-size: 13px; }
+.teach-error { margin-top: 14px; color: var(--danger, #d65b5b); font-size: 13px; }
+.teach-lesson { margin-top: 22px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--panel); }
+.teach-lesson-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 18px 20px; border-bottom: 1px solid var(--line); }
+.teach-lesson-head h3 { margin: 5px 0 0; font-size: 20px; }
+.teach-controls { display: flex; flex-wrap: wrap; justify-content: end; gap: 7px; }
+.teach-controls button { font-size: 11px; padding: 8px 10px; }
+.teach-controls .teach-stop { color: var(--muted); }
+.teach-content { padding: 20px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+.teach-content h1, .teach-content h2, .teach-content h3 { font-size: 16px; margin: 18px 0 8px; }
+.teach-content p { margin: 8px 0; }
+.teach-content li { margin: 5px 0; }
+.teach-note { border-top: 1px solid var(--line); padding: 12px 20px; margin: 0; color: var(--muted); font-size: 11px; }
+.teach-generating { padding: 0 20px; color: var(--muted); font-size: 12px; }
+@media (max-width: 720px) { .teach-form-row, .teach-lesson-head { align-items: stretch; flex-direction: column; } .teach-form-row select { width: 100%; } .teach-controls { justify-content: start; } }
